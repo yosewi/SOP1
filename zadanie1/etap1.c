@@ -1,0 +1,33 @@
+#include <dirent.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <bits/getopt_core.h> // niepotrzebne ale IDE nie widziało optarg
+#include <unistd.h>
+#include <getopt.h>
+#define MAXPATH 101
+
+#define ERR(source) (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
+
+void scan_dir(){
+    DIR* d;
+    struct dirent *dp;
+    if((d = opendir(".")) == NULL){
+        ERR("opendir");
+    }
+    do{
+        if((dp = readdir(d))!=NULL){
+            printf("%s\n", dp->d_name);
+        }
+    }while(dp!=NULL);
+    if(closedir(d)){
+        ERR("closedir");
+    }
+}
+
+int main(int argc, char **argv){
+    printf("SCIEZKA:\n%s\nLISTA PLIKOW:\n", argv[0]);
+    scan_dir();
+    return EXIT_SUCCESS;
+}
