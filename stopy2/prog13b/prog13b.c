@@ -48,6 +48,26 @@ int main(int argc, char **argv){
     }
 
     create_children(child_count);
+    while(child_count>0){
+        sleep(3);
+        pid_t pid;
+        while(1){
+            pid = waitpid(0, NULL, WNOHANG);
+            if(pid > 0){
+                child_count--;
+            }
+            if(0 == pid){
+                break;
+            }
+            if(0 >= pid){
+                if(ECHILD == errno){
+                    break;
+                }
+                ERR("waitpid");
+            }
+        }
+        printf("Parent: %d processess remain\n", child_count);
+    }
     return EXIT_SUCCESS;
 
 }
