@@ -15,7 +15,7 @@
 #define ERR(source) \
     (fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), perror(source), kill(0, SIGKILL), exit(EXIT_FAILURE))
 
-volatile sig_atomic_t work = 0, pause_work = 0, work2 = 0;
+volatile sig_atomic_t work = 0, pause_work = 0, work2 = 0, end = 0, end2 = 0;
 pid_t children[MAX_N];
 
 void usr1_handler(int sig){
@@ -30,6 +30,14 @@ void usr1_handler2(int sig){
 void usr2_handler(int sig){
     pause_work = 1;
     work = 0;
+}
+
+void int_handler(int sig){
+    end = 1;
+}
+
+void int2_handler(int sig){
+    end2 = 1;
 }
 
 void sethandler(void (*f)(int), int sigNo){
@@ -47,6 +55,7 @@ void child_work(){
     srand(getpid());
     sethandler(usr1_handler, SIGUSR1);
     sethandler(usr2_handler, SIGUSR2);
+    sethandler(int2_handler, SIGINT);
     sigset_t mask, oldmask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGUSR1);
@@ -55,18 +64,25 @@ void child_work(){
         while(!work){
             sigsuspend(&oldmask);
         }
-        while(1){
+        while(end2 != 1){
             if(!pause_work){
+                sigprocmask(SIG_SETMASK, &oldmask, NULL);
                 int r = 100 + rand() % (200 - 100 + 1);
             struct timespec t = {1, 0};
             nanosleep(&t, NULL);
             count++;
             printf("%d: %d\n", getpid(), count);
+            sigprocmask(SIG_BLOCK, &mask, NULL);
             }
             else{
                 sigsuspend(&oldmask);
             }
         }
+        char file[MAX_N];
+        sprintf(file, "%d.txt", getpid());
+        FILE *f = fopen(file, "w+");
+        fprintf(f, "%d", count);
+        fclose(f);
 }
 
 void create_children(int n){
@@ -94,12 +110,13 @@ int main(int argc, char** argv){
     create_children(n);
     int i = 0;
     sethandler(usr1_handler2, SIGUSR1);
+    sethandler(int_handler, SIGINT);
     sigset_t mask, oldmask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGUSR1);
     sigprocmask(SIG_BLOCK, &mask, &oldmask);
     kill(children[0], SIGUSR1);
-    while(1){
+    while(end != 1){
         while(!work2){
             sigsuspend(&oldmask);
         }
@@ -108,6 +125,8 @@ int main(int argc, char** argv){
         i = (i+1) % n;
         kill(children[i], SIGUSR1);
     }
+    sethandler(SIG_IGN, SIGINT);
+    kill(0, SIGINT);
     while(wait(NULL) > 0){
 
     }
