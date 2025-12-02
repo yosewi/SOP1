@@ -1,0 +1,89 @@
+prog13b: tworzy n procesow, kazdy czeka 5-10 sekund i wypisuje swoj pid.
+rodzic co 3s wyswietla ile posiada podprocesow. czeka na dzieci
+
+prog14: tworzy n procesow, wysyla naprzemiennie usr1, usr2 do dzieci,
+po k i p sekundach. konczy sie jak skoncza sie dzieci. dziecko losuje
+spanie 5-10 sekund i wypisuje sukces jesli ostatnio dostal usr1
+failure jak dostal usr2.
+
+prog15: tworzy dziecko ktory co jakis czas wysyla do rodzica usr1,
+co nty raz wysyla usr2. rodzic czeka na usr2. oba procesty zliczaja 
+i wypisuja na biezaco ilosc wylanych i odebranych usr2.
+
+prog16:
+rodzic odbiera sygnaly usr1 wysylane co zadany czas i je zlicza.
+proces glowny tworzy plik o nazwie name o zadanej ilosci blokow,
+o zadanym rozmiarze. zawartosc pliku pochodzi z /dev/urandom. 
+kazdy blok kopiujemy osobno, konrolujac rozmiary. po skopiowaniu
+bloku podajemy na stderr ilosc przepisanych blokow i stan licznikow 
+sygnalow.
+
+warsztaty: proces ustawia maske sygnalow blokujaca usr1, usr2, int,
+wypisuje waiting for sigusr1 i czeka na usr1. po otrzymaniu konczy sie.
+funkcja wypisuje tekst, otwiera plik i odczytuje zawartosc.
+dla kazdej linijki pliku funkcja bierze linie i wypisuje cos.
+po kazdym wypisaniu linii wywoluje fork. potem zamiast konczyc 
+sie po przetworzeniu proces czeka na usr2. po otrzymaniu losowo
+albo cos wypisuje i czeka na sygnaly, albo wysyla usr2 do rodzica
+i czeka na sygnaly. jak proces dostanie sigint to wypisuje cos
+wysyla sigint do dzieci i sie konczy.
+
+zad1: tworzy n procesow potomnych. proces potomny losuje s od 10-100KB.
+dziecko tworzy plik o nazwie pid.txt zawierajacy tyle blokow o 
+rozmiarze s zlozonych z n cyfr ile razy otrzyma sigusr1. 
+proces potomny konczy dzialanie zamyka plik po 1 sekundzie.
+rodzic przez sekunde co 10ms wysyla wszystkim dizeciom usr1,
+i czeka na zakonczenie dzieci po czym sie konczy.
+
+zad2: tworzenie procesow dzieci, wypisuja pid i zasypiaja na losowy 
+czas 300-1000ms. rodzic czeka na ich zakonczenie. rodzic po 
+alarmie wysyla sigterm do wszystkich dzieci, a dzieci czekaja 
+na jego otrzymanie. gdy dziecko jest chore, zaczyna kaslac losowo
+co 50-200ms i kaszle na wszystkie inne dzieci w przedszkolu.
+wysylajac sigusr1. gdy zdrowe dziecko otrzyma sygnal istnieje
+prawdopodobienstwo ze zachoruje i zacznie kaszlec.
+po chore dziecko przyjezdzaja rodzice po k sekundach.
+
+zad3: rodzic tworzy n dzieci. zleca pierwszemu prace wysylajac usr1
+dziecko zaczyna prace w petli, spi losowa ilosc czasu 100-200ms
+i dodaje jeden do lokalnego licznika, wypisuje.
+rodzic jak otrzyma sigusr1 to wysyla sigusr 2 do pracujacego
+dziecka i usr1 do nastepnego dziecka. dziecko jak otrzyma usr2
+zatrzymuje petle i czeka na usr1. po otrzymaniu sigint rodzic przekazuje
+ten sygnal dzieciom. a dzieci zapisuja swoj licznik do pliku i koncza dzialanie.
+
+
+
+zadanie4: Napisz program, który za pomocą wielu procesów, będzie równolegle transformował tekst we wskazanym pliku tekstowym.
+
+Program przyjmuje dwa parametry: plik f i liczbę procesów potomnych n (0 < n < 10).
+
+Zabroniony jest busy-waiting! Busy-waiting = etap do poprawki.
+Można używać tylko niskopoziomowego API do czytania/pisania do plików (open/close).
+Tam gdzie się pojawia obsługa sygnałów, poprawnie trzeba obsługiwać przerwania sygnałami.
+W szczególności warto sobie przygotować wcześniej własną funkcję "sleep" (śpiącą z dokładnością do milisekund lub większą), najlepiej używającą nanosleep, która w momencie przerwania, dosypia niedospany czas.
+Funkcje obsługujące sygnały muszą być lekkie. To jest najlepiej jeżeli jedyna ich zawartość, to ustawienie jakiejś flagi last_sig.
+
+1.
+Uruchom n procesów potomnych. 
+Każdy proces potomny wypisuje swój PID i kończy pracę.
+Proces główny czeka na zakończenie pracy procesów potomnych i kończy pracę.
+
+2.
+Proces główny wczytuje plik f.
+Proces główny rozdziela zawartość pliku między dzieci (w miarę równo, ostatni proces może mieć np. mniej znaków do przetworzenia).
+Każde z dzieci może mieć w swojej pamięci wyłącznie swój fragment do przetworzenia.
+Procesy potomne czekają na otrzymanie sygnału SIGUSR1. Po jego otrzymaniu wypisują swój PID oraz przydzielony fragment pliku i kończą pracę.
+Proces główny po stworzeniu wszystkich procesów dzieci wysyła do wszystkich procesów potomnych sygnał SIGUSR1.
+
+3.
+Procesy dzieci po otrzymaniu sygnału SIGUSR1 rozpoczynają przetwarzanie pliku znak po znaku:
+Co drugi znak z zakresu [a-zA-Z] jest zamieniany na wielką literę, jeżeli był małą literą lub na małą literę, jeżeli był wielką literą. Pozostałe znaki pozostawiane są bez zmian.
+Ala ma kota -> alA mA kOtA
+Po przetworzeniu znaku proces śpi 0.25 sekundy i dopisuje go do pliku o nazwie $"{f}-{i}", gdzie i to liczba porządkowa procesu (od 1 do n).
+
+4.
+Procesy obsługują poprawnie sygnał SIGINT:
+Po otrzymaniu sygnału SIGINT (Ctrl-C) rodzic rozsyła sygnał SIGINT do wszystkich procesów dzieci
+Proces dziecka po otrzymaniu sygnału SIGINT zamyka wszystkie otwarte zasoby i kończy pracę.
+W przypadku przerwania snu dziecka, dziecko dosypia pozostały czas i dopisuje do swojego pliku ostatnio przetworzony znak.

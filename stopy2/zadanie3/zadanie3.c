@@ -66,8 +66,8 @@ void child_work(){
         }
         while(end2 != 1){
             if(!pause_work){
-                sigprocmask(SIG_SETMASK, &oldmask, NULL);
-                int r = 100 + rand() % (200 - 100 + 1);
+            sigprocmask(SIG_SETMASK, &oldmask, NULL);
+            int r = 100 + rand() % (200 - 100 + 1);
             struct timespec t = {1, 0};
             nanosleep(&t, NULL);
             count++;

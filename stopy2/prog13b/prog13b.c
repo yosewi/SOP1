@@ -19,7 +19,7 @@ void usage(char *name)
 void child_work(int i){
     srand(time(NULL) * getpid());
     int t = 5 + rand() % (10 - 5 + 1);
-    sleep(t);
+    sleep(t); //czeka 5-10 sekund
     printf("Process with PID %d terminated\n", getpid());
 }
 
