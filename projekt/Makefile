@@ -4,14 +4,18 @@ ifdef CI
 override CFLAGS=-std=c17 -Wall -Wextra -Wshadow -Werror -Wno-unused-parameter -Wno-unused-const-variable
 endif
 
-NAME=projekt
+NAME=sop-backup
 
 .PHONY: clean all
 
 all: ${NAME}
 
-${NAME}: ${NAME}.c
-	gcc $(CFLAGS) -o ${NAME} ${NAME}.c
+SOURCES=$(shell find src -type f -iname '*.c')
+
+OBJECTS=$(foreach x, $(basename $(SOURCES)), $(x).o)
+
+$(NAME): $(OBJECTS)
+	$(CC) $^ ${CFLAGS} -o $@
 
 clean:
-	rm -f ${NAME}
+	rm -f $(NAME) $(OBJECTS)
