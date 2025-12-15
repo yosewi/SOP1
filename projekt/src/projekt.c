@@ -34,9 +34,9 @@ struct WatchMap {
     int watch_count;
 };
 
-pid_t job_pids[MAX_JOBS];
-char job_srcs[MAX_JOBS][PATH_MAX];
-char job_dsts[MAX_JOBS][PATH_MAX];
+pid_t pids[MAX_JOBS];
+char pid_srcs[MAX_JOBS][PATH_MAX];
+char pid_dsts[MAX_JOBS][PATH_MAX];
 
 char *args[MAX_ARGS];
 int arg_count = 0;
@@ -62,13 +62,11 @@ void ignore_zombies() {
     }
 }
 
-void handle_main_signal(int sig) {
-    (void)sig;
+void main_handler(int sig) {
     main_keep_running = 0;
 }
 
-void handle_child_sigterm(int sig) {
-    (void)sig;
+void sigterm_handler(int sig) {
     keep_running = 0;
 }
 
@@ -102,6 +100,7 @@ ssize_t bulk_write(int fd, char* buf, size_t count) {
 int make_absolute_path(const char *input, char *output) {
     if (input[0] == '/') {
         if (strlen(input) >= PATH_MAX){
+            perror("path is too long\n");
             return -1;
         }
 
@@ -112,10 +111,12 @@ int make_absolute_path(const char *input, char *output) {
         char cwd[PATH_MAX];
 
         if (getcwd(cwd, sizeof(cwd)) == NULL){
+            perror("Error: getcwd\n");
             return -1;
         }
 
         if (strlen(cwd) + 1 + strlen(input) >= PATH_MAX){
+            perror("absolute path is too long\n");
             return -1;
         }
 
@@ -132,6 +133,7 @@ int is_dir_empty(const char *path) {
     int empty = 1;
 
     if((d = opendir(path)) == NULL){
+        perror("opendir\n");
         return 0;
     }
 
@@ -153,7 +155,7 @@ int is_dir_empty(const char *path) {
 
 void add_to_map(struct WatchMap *map, int wd, const char *path) {
     if (map->watch_count >= MAX_WATCHES){
-        fprintf(stderr, "Exceeded max watches!\n");
+        fprintf(stderr, "Too many watches\n");
         return;
     }
     map->watch_map[map->watch_count].wd = wd;
@@ -197,7 +199,7 @@ void update_watch_paths(struct WatchMap *map, const char *old_path, const char *
 }
 
 void add_watch_recursive(int notify_fd, struct WatchMap *map, const char *base_path) {
-    uint32_t mask = IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO;
+    uint32_t mask = IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF;
     int wd = inotify_add_watch(notify_fd, base_path, mask);
 
     if (wd < 0) {
@@ -237,18 +239,22 @@ void add_watch_recursive(int notify_fd, struct WatchMap *map, const char *base_p
 int copy_file_data(const char *src, const char *dst, mode_t mode) {
     int f_src = TEMP_FAILURE_RETRY(open(src, O_RDONLY));
     if (f_src == -1){
+        perror("open\n");
         return -1;
     }
 
     struct stat st;
     if (fstat(f_src, &st) < 0) {
         TEMP_FAILURE_RETRY(close(f_src));
+        perror("fstat\n");
         return -1;
     }
 
     int f_dst = TEMP_FAILURE_RETRY(open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode));
+
     if (f_dst == -1){
         TEMP_FAILURE_RETRY(close(f_src));
+        perror("open\n");
         return -1;
     }
     
@@ -259,6 +265,7 @@ int copy_file_data(const char *src, const char *dst, mode_t mode) {
     while ((bytes_read = bulk_read(f_src, buf, sizeof(buf))) > 0) {
         if (bulk_write(f_dst, buf, bytes_read) != bytes_read) {
             result = -1;
+            perror("bulk_write\n");
             break;
         }
     }
@@ -274,6 +281,11 @@ int copy_file_data(const char *src, const char *dst, mode_t mode) {
         if (futimens(f_dst, times) < 0) {
             result = -1;
         }
+
+        if(fchmod(f_dst, mode) < 0){
+            perror("fchmod");
+            result = -1;
+        }
     }
 
     TEMP_FAILURE_RETRY(close(f_src));
@@ -282,19 +294,22 @@ int copy_file_data(const char *src, const char *dst, mode_t mode) {
 }
 
 int copy_recursive(const char *src_base, const char *dst_base) {
+    DIR *d;
     struct dirent *entry;
     struct stat st;
-    DIR *d;
 
     if (lstat(src_base, &st) < 0){
+        perror("lstat\n");
         return -1;
     }
 
     if (TEMP_FAILURE_RETRY(mkdir(dst_base, st.st_mode)) < 0 && errno != EEXIST){
+        perror("mkdir\n");
         return -1;
     }
 
     if((d = opendir(src_base)) == NULL){
+        perror("opendir\n");
         return -1;
     }
 
@@ -312,6 +327,7 @@ int copy_recursive(const char *src_base, const char *dst_base) {
         struct stat entry_st;
 
         if (lstat(src_path, &entry_st) < 0){
+            perror("lstat\n");
             continue;
         }
 
@@ -346,6 +362,7 @@ int remove_recursive(const char *path) {
     DIR *d;
     
     if (lstat(path, &st) < 0) {
+        perror("lstat\n");
         return -1;
     }
 
@@ -354,6 +371,7 @@ int remove_recursive(const char *path) {
     }
 
     if((d = opendir(path)) == NULL){
+        perror("opendir\n");
         return -1;
     }
 
@@ -376,7 +394,7 @@ int remove_recursive(const char *path) {
     return rmdir(path);
 }
 
-void monitor_loop(const char *src_root, const char *dst_root) {
+void monitor(const char *src_base, const char *dst_base) {
     int notify_fd = inotify_init();
 
     if (notify_fd < 0) {
@@ -385,7 +403,12 @@ void monitor_loop(const char *src_root, const char *dst_root) {
 
     struct WatchMap map = {0};
 
-    add_watch_recursive(notify_fd, &map, src_root);
+    add_watch_recursive(notify_fd, &map, src_base);
+
+    int root_wd = -1;
+    if (map.watch_count > 0) {
+        root_wd = map.watch_map[0].wd;
+    }
 
     uint32_t pending_cookie = 0;
     char pending_move_path[PATH_MAX] = "";
@@ -405,7 +428,13 @@ void monitor_loop(const char *src_root, const char *dst_root) {
         while (i < len) {
             struct inotify_event *event = (struct inotify_event *) &buffer[i];
             
-            if (event->mask & IN_IGNORED) {
+            if ((event->mask & IN_IGNORED) || (event->mask & IN_DELETE_SELF)) {
+
+                if (event->wd == root_wd) {
+                    keep_running = 0;
+                    break; 
+                }
+
                 remove_from_map(&map, event->wd);
                 
                 if (map.watch_count == 0) {
@@ -424,9 +453,9 @@ void monitor_loop(const char *src_root, const char *dst_root) {
 
                 snprintf(src_path, sizeof(src_path), "%s/%s", watch->path, event->name);
 
-                if (strncmp(src_path, src_root, strlen(src_root)) == 0) {
-                    const char *rel_path = src_path + strlen(src_root);
-                    snprintf(dst_path, sizeof(dst_path), "%s%s", dst_root, rel_path);
+                if (strncmp(src_path, src_base, strlen(src_base)) == 0) {
+                    const char *rel_path = src_path + strlen(src_base);
+                    snprintf(dst_path, sizeof(dst_path), "%s%s", dst_base, rel_path);
 
                     if (event->mask & IN_MOVED_FROM) { 
                         pending_cookie = event->cookie;
@@ -493,45 +522,39 @@ void monitor_loop(const char *src_root, const char *dst_root) {
     }
 }
 
-void handle_sigterm(int sig) {
-    (void)sig;
-    keep_running = 0;
-}
-
 void child_work(const char *src, const char *dst) {
 
-    sethandler(handle_child_sigterm, SIGTERM);
+    sethandler(sigterm_handler, SIGTERM);
     sethandler(SIG_IGN, SIGINT);
 
     if (copy_recursive(src, dst) != 0) {
         exit(EXIT_FAILURE);
     }
 
-    monitor_loop(src, dst);
+    monitor(src, dst);
 
     exit(EXIT_SUCCESS);
 }
 
-void add_to_jobs_list(pid_t pid, const char *src, const char *dst) {
+void add_to_pids_list(pid_t pid, const char *src, const char *dst) {
     for (int i = 0; i < MAX_JOBS; i++) {
-        if (job_pids[i] == 0) {
-            job_pids[i] = pid;
-            strncpy(job_srcs[i], src, PATH_MAX);
-            strncpy(job_dsts[i], dst, PATH_MAX);
+        if (pids[i] == 0) {
+            pids[i] = pid;
+            strncpy(pid_srcs[i], src, PATH_MAX);
+            strncpy(pid_dsts[i], dst, PATH_MAX);
             return;
         }
     }
-    printf("Limit kopii zapasowych osiągnięty.\n");
+    printf("Too many children!!!\n");
 }
 
 void forkbomb_protector() {
     for (int i = 0; i < MAX_JOBS; i++) {
-        if (job_pids[i] != 0) {
-            int status;
-            pid_t result = waitpid(job_pids[i], &status, WNOHANG);
+        if (pids[i] != 0) {
+            pid_t result = waitpid(pids[i], NULL, WNOHANG);
 
             if (result > 0 || (result == -1 && errno == ECHILD)) {
-                job_pids[i] = 0;
+                pids[i] = 0;
             }
             
         }
@@ -606,7 +629,7 @@ void parse_input(char *line) {
 
 void cmd_add() {
     if (arg_count < 3) { 
-        printf("Użycie: add <zrodlo> <cel> [cel2 ...]\n"); 
+        printf("Usage: add <source> <backup> <backup2> ...\n"); 
         return; 
     
     }
@@ -614,42 +637,44 @@ void cmd_add() {
     char abs_src[PATH_MAX];
 
     if (make_absolute_path(args[1], abs_src) != 0) { 
-        printf("Błąd ścieżki źródłowej.\n"); 
+        printf("Source path error\n");
         return;  
     }
 
     struct stat st;
 
     if (lstat(abs_src, &st) < 0 || !S_ISDIR(st.st_mode)) { 
-        printf("Błąd: Źródło '%s' nie jest katalogiem.\n", abs_src); 
+        printf("Error: Source '%s' is not a directory.\n", abs_src); 
         return; 
     }
 
     for (int i = 2; i < arg_count; i++) {
-        char *target = args[i]; char abs_dst[PATH_MAX];
+        char *target = args[i]; 
+        char abs_dst[PATH_MAX];
 
         if (make_absolute_path(target, abs_dst) != 0) { 
-            printf("Błąd ścieżki docelowej.\n"); 
+            printf("Destination path error\n"); 
             continue; 
         }
 
         if (strncmp(abs_dst, abs_src, strlen(abs_src)) == 0) {
             if (abs_dst[strlen(abs_src)] == '/' || abs_dst[strlen(abs_src)] == '\0') {
-                printf("Błąd: Pętla! Kopia wewnątrz źródła.\n"); continue;
+                printf("Error: Backup inside a source directory\n"); 
+                continue;
             }
         }
 
         int duplicate = 0;
 
         for(int j=0; j<MAX_JOBS; j++) {
-            if (job_pids[j] != 0 && strcmp(job_srcs[j], abs_src) == 0 && strcmp(job_dsts[j], abs_dst) == 0) {
+            if (pids[j] != 0 && strcmp(pid_srcs[j], abs_src) == 0 && strcmp(pid_dsts[j], abs_dst) == 0) {
                 duplicate = 1; 
                 break;
             }
         }
 
         if (duplicate) { 
-            printf("Błąd: Duplikat zadania.\n"); 
+            printf("Error: That process already exists\n"); 
             continue; 
         }
 
@@ -657,7 +682,7 @@ void cmd_add() {
 
         if (lstat(abs_dst, &dst_st) == 0) {
             if (!S_ISDIR(dst_st.st_mode) || !is_dir_empty(abs_dst)) { 
-                printf("Błąd: Cel '%s' zajęty.\n", abs_dst); 
+                printf("Error: Destinetion '%s' is not empty.\n", abs_dst); 
                 continue; 
             }
         }
@@ -670,14 +695,13 @@ void cmd_add() {
         }
 
         if (pid == 0) { 
-            close(STDIN_FILENO); 
             child_work(abs_src, abs_dst); 
-            exit(0); 
+            exit(EXIT_SUCCESS); 
         }
 
         else { 
             printf("Start PID %d: %s -> %s\n", pid, abs_src, abs_dst); 
-            add_to_jobs_list(pid, abs_src, abs_dst); 
+            add_to_pids_list(pid, abs_src, abs_dst); 
         }
     }
 }
@@ -686,22 +710,22 @@ void cmd_list() {
 
     forkbomb_protector();
 
-    printf("Aktywne zadania:\n");
+    printf("Active processes:\n");
     int found = 0;
     for (int i = 0; i < MAX_JOBS; i++) {
-        if (job_pids[i] != 0) {
-            printf("[%d] PID: %d | %s -> %s\n", i, job_pids[i], job_srcs[i], job_dsts[i]);
+        if (pids[i] != 0) {
+            printf("[%d] PID: %d | %s -> %s\n", i, pids[i], pid_srcs[i], pid_dsts[i]);
             found = 1;
         }
     }
     if (!found) {
-        printf("Brak.\n");
+        printf("None.\n");
     }
 }
 
 void cmd_end() {
     if (arg_count < 2) { 
-        printf("Użycie: end <zrodlo> [cel] ...\n"); 
+        printf("Usage: end <source> <backup> <backup2> ...\n"); 
         return; 
     }
 
@@ -709,39 +733,40 @@ void cmd_end() {
     char abs_src[PATH_MAX];
 
     if (make_absolute_path(src_arg, abs_src) != 0) { 
-        printf("Błąd źródła.\n"); 
+        printf("Source error\n"); 
         return; 
     }
 
     for (int i = 2; i < arg_count; i++) {
-        char *dst_arg = args[i]; char abs_dst[PATH_MAX];
+        char *dst_arg = args[i]; 
+        char abs_dst[PATH_MAX];
 
         if (make_absolute_path(dst_arg, abs_dst) != 0) {
             strncpy(abs_dst, dst_arg, PATH_MAX);
         }
 
         for (int j = 0; j < MAX_JOBS; j++) {
-            if (job_pids[j] != 0 && strcmp(job_srcs[j], abs_src) == 0 && strcmp(job_dsts[j], abs_dst) == 0) {
-                kill(job_pids[j], SIGTERM); 
-                waitpid(job_pids[j], NULL, 0);
-                printf("Stop PID %d: %s -> %s\n", job_pids[j], job_srcs[j], job_dsts[j]);
-                job_pids[j] = 0;
+            if (pids[j] != 0 && strcmp(pid_srcs[j], abs_src) == 0 && strcmp(pid_dsts[j], abs_dst) == 0) {
+                kill(pids[j], SIGTERM); 
+                waitpid(pids[j], NULL, 0);
+                printf("Stop PID %d: %s -> %s\n", pids[j], pid_srcs[j], pid_dsts[j]);
+                pids[j] = 0;
             }
         }
     }
 }
 
-int restore_copy_recursive(const char *backup_base, const char *src_base) {
+int restore_copy(const char *backup_base, const char *src_base) {
     DIR *d; 
     
     if((d = opendir(backup_base)) == NULL){
         return -1;
     }
 
-    struct stat st_backup_root;
+    struct stat st_backup_base;
 
-    if (lstat(backup_base, &st_backup_root) == 0) {
-        if (mkdir(src_base, st_backup_root.st_mode) < 0 && errno != EEXIST) {
+    if (lstat(backup_base, &st_backup_base) == 0) {
+        if (mkdir(src_base, st_backup_base.st_mode) < 0 && errno != EEXIST) {
 
         }
     }
@@ -766,7 +791,7 @@ int restore_copy_recursive(const char *backup_base, const char *src_base) {
         }
 
         if (S_ISDIR(st_backup.st_mode)) {
-            restore_copy_recursive(backup_path, src_path);
+            restore_copy(backup_path, src_path);
         }
 
         else if (S_ISREG(st_backup.st_mode)) {
@@ -802,7 +827,7 @@ int restore_copy_recursive(const char *backup_base, const char *src_base) {
     return 0;
 }
 
-int restore_clean_recursive(const char *src_base, const char *backup_base) {
+int restore_clean(const char *src_base, const char *backup_base) {
     DIR *d; 
     
     if((d = opendir(src_base)) == NULL){
@@ -831,7 +856,7 @@ int restore_clean_recursive(const char *src_base, const char *backup_base) {
         else {
             struct stat st_src;
             if (lstat(src_path, &st_src) == 0 && S_ISDIR(st_src.st_mode)) {
-                restore_clean_recursive(src_path, backup_path);
+                restore_clean(src_path, backup_path);
             }
         }
     }
@@ -845,7 +870,7 @@ int restore_clean_recursive(const char *src_base, const char *backup_base) {
 
 void cmd_restore() {
     if (arg_count != 3) { 
-        printf("Użycie: restore <source path> <target path>\n"); 
+        printf("Usage: restore <source> <target>\n"); 
         return; 
     }
     
@@ -853,43 +878,43 @@ void cmd_restore() {
     char abs_backup[PATH_MAX]; 
     
     if (make_absolute_path(args[1], abs_src) != 0) { 
-        printf("Błąd ścieżki źródłowej.\n"); 
+        printf("Source error\n"); 
         return; 
     }
 
     if (make_absolute_path(args[2], abs_backup) != 0) { 
-        printf("Błąd ścieżki backupu.\n"); 
+        printf("Backup error\n"); 
         return; 
     }
 
     struct stat st;
 
     if (lstat(abs_backup, &st) < 0 || !S_ISDIR(st.st_mode)) { 
-        printf("Błąd: Backup '%s' nie istnieje.\n", abs_backup); 
+        printf("Error: Backup '%s' does not exist\n", abs_backup); 
         return; 
     }
 
     for (int j = 0; j < MAX_JOBS; j++) {
-        if (job_pids[j] != 0 && strcmp(job_srcs[j], abs_src) == 0 && strcmp(job_dsts[j], abs_backup) == 0) {
-            printf("Błąd: Aktywna synchronizacja! Użyj end.\n");
+        if (pids[j] != 0 && strcmp(pid_srcs[j], abs_src) == 0 && strcmp(pid_dsts[j], abs_backup) == 0) {
+            printf("Error: You are watching '%s' by '%s'\n", pid_srcs[j], pid_dsts[j]);
             return;
         }
     }
 
-    printf("Przywracanie: %s -> %s ...\n", abs_backup, abs_src);
+    printf("Restoring: %s -> %s\n", abs_backup, abs_src);
     
-    restore_copy_recursive(abs_backup, abs_src);
+    restore_copy(abs_backup, abs_src);
     
-    restore_clean_recursive(abs_src, abs_backup);
+    restore_clean(abs_src, abs_backup);
     
-    printf("Gotowe.\n");
+    printf("Done.\n");
 }
 
 int main() {
     ignore_zombies();
 
-    sethandler(handle_main_signal, SIGINT);
-    sethandler(handle_main_signal, SIGTERM);
+    sethandler(main_handler, SIGINT);
+    sethandler(main_handler, SIGTERM);
 
     sigset_t mask;
     sigfillset(&mask);
@@ -902,17 +927,19 @@ int main() {
     }
 
     for (int i = 0; i < MAX_JOBS; i++) {
-        job_pids[i] = 0;
+        pids[i] = 0;
     }
 
     char line[MAX_CMD_LEN];
-    printf("Backup\n");
+    printf("Interactive backups\n");
 
     while (main_keep_running) {
         forkbomb_protector(); 
 
         if (fgets(line, sizeof(line), stdin) == NULL) {
-            if (errno == EINTR && main_keep_running) continue; 
+            if (errno == EINTR && main_keep_running) {
+                continue; 
+            }
             break; 
         }
 
@@ -942,7 +969,7 @@ int main() {
         }
 
         else {
-            printf("Nieznana komenda.\n");
+            printf("Unknown command\n");
         }
         
         clear_args();
@@ -950,8 +977,8 @@ int main() {
 
     printf("\nFinish\n");
     for(int i=0; i<MAX_JOBS; i++) {
-        if(job_pids[i]!=0) { 
-            kill(job_pids[i], SIGTERM); 
+        if(pids[i]!=0) { 
+            kill(pids[i], SIGTERM); 
         }
     }
     clear_args(); 
