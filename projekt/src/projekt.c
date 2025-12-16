@@ -629,18 +629,18 @@ void cmd_add() {
     int created_new = 0;
 
     struct stat st_check;
-        if (lstat(target, &st_check) < 0) {
-            if (errno == ENOENT) {
-                if (mkdir(target, 0755) < 0) {
-                    perror("mkdir target failed");
-                    continue;
-                }
-                created_new = 1;
-            } else {
-                perror("lstat target failed");
-                continue;
-            }
+    if (lstat(target, &st_check) < 0) {
+      if (errno == ENOENT) {
+        if (mkdir(target, 0755) < 0) {
+          perror("mkdir target failed");
+          continue;
         }
+        created_new = 1;
+      } else {
+        perror("lstat target failed");
+        continue;
+      }
+    }
 
     if (make_absolute_path(target, abs_dst) != 0) {
       printf("Destination path error\n");
@@ -670,13 +670,13 @@ void cmd_add() {
     }
 
     if (!created_new) {
-        struct stat dst_st;
-        if (lstat(abs_dst, &dst_st) == 0) {
-            if (!S_ISDIR(dst_st.st_mode) || !is_dir_empty(abs_dst)) { 
-                printf("Error: Destination '%s' is not empty.\n", abs_dst); 
-                continue; 
-            }
+      struct stat dst_st;
+      if (lstat(abs_dst, &dst_st) == 0) {
+        if (!S_ISDIR(dst_st.st_mode) || !is_dir_empty(abs_dst)) {
+          printf("Error: Destination '%s' is not empty.\n", abs_dst);
+          continue;
         }
+      }
     }
 
     pid_t pid = fork();
@@ -748,7 +748,8 @@ void cmd_end() {
   }
 }
 
-int restore_copy(const char *backup_base, const char *src_base) {
+int restore_copy(const char *backup_base, const char *src_base,
+                 const char *root_backup, const char *root_src) {
   DIR *d;
 
   if ((d = opendir(backup_base)) == NULL) {
@@ -783,7 +784,7 @@ int restore_copy(const char *backup_base, const char *src_base) {
     }
 
     if (S_ISDIR(st_backup.st_mode)) {
-      restore_copy(backup_path, src_path);
+      restore_copy(backup_path, src_path, root_backup, root_src);
     }
 
     else if (S_ISREG(st_backup.st_mode)) {
@@ -807,7 +808,14 @@ int restore_copy(const char *backup_base, const char *src_base) {
       if (len != -1) {
         target[len] = '\0';
         unlink(src_path);
-        symlink(target, src_path);
+        if (strncmp(target, root_backup, strlen(root_backup)) == 0) {
+          char new_target[PATH_MAX];
+          snprintf(new_target, sizeof(new_target), "%s%s", root_src,
+                   target + strlen(root_backup));
+          TEMP_FAILURE_RETRY(symlink(new_target, src_path));
+        } else {
+          TEMP_FAILURE_RETRY(symlink(target, src_path));
+        }
       }
     }
   }
@@ -898,7 +906,7 @@ void cmd_restore() {
 
   printf("Restoring: %s -> %s\n", abs_backup, abs_src);
 
-  restore_copy(abs_backup, abs_src);
+  restore_copy(abs_backup, abs_src, abs_backup, abs_src);
 
   restore_clean(abs_src, abs_backup);
 
@@ -924,7 +932,13 @@ int main() {
   }
 
   char line[MAX_CMD_LEN];
-  printf("Interactive backups\n");
+
+  printf("Interactive backups - Available commands:\n");
+  printf("add <source> <dst1> <dst2> ... - adds watching a directory\n");
+  printf("list - shows current active watchers\n");
+  printf("end <source> <dst1> ... - stops watching a directory\n");
+  printf("restore <source> <backup> - restores a backup to a source\n");
+  printf("exit - ends the program\n");
 
   while (main_keep_running) {
     forkbomb_protector();
