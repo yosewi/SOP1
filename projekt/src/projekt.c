@@ -459,6 +459,25 @@ void monitor(const char *src_base, const char *dst_base) {
               } else if (S_ISREG(st.st_mode)) {
                 copy_file_data(src_path, dst_path, st.st_mode);
               }
+              else if (S_ISLNK(st.st_mode)) {
+                char target[PATH_MAX];
+                ssize_t l = readlink(src_path, target, sizeof(target) - 1);
+                if (l != -1) {
+                  target[l] = '\0';
+                  unlink(dst_path);
+                  
+                  if (strncmp(target, src_base, strlen(src_base)) == 0) {
+                    char new_target[PATH_MAX];
+                    snprintf(new_target, sizeof(new_target), "%s%s", dst_base,
+                             target + strlen(src_base));
+                    symlink(new_target, dst_path);
+                  } 
+                  
+                  else {
+                    symlink(target, dst_path);
+                  }
+                }
+              }
             }
           }
 
@@ -483,9 +502,19 @@ void monitor(const char *src_base, const char *dst_base) {
                 char target[PATH_MAX];
                 ssize_t l = readlink(src_path, target, sizeof(target) - 1);
                 if (l != -1) {
-                  target[l] = '\0';
-                  unlink(dst_path);
-                  symlink(target, dst_path);
+                   target[l] = '\0';
+                   unlink(dst_path);
+                  
+                   if (strncmp(target, src_base, strlen(src_base)) == 0) {
+                     char new_target[PATH_MAX];
+                     snprintf(new_target, sizeof(new_target), "%s%s", dst_base,
+                              target + strlen(src_base));
+                     symlink(new_target, dst_path);
+                   }
+
+                   else {
+                     symlink(target, dst_path);
+                   }
                 }
               }
             }
