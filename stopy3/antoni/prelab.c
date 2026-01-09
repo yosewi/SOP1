@@ -1,3 +1,9 @@
+/**
+ * Makro _GNU_SOURCE:
+ * Co robi: Włącza rozszerzenia specyficzne dla systemu GNU/Linux.
+ * W jaki sposób: Musi być zdefiniowane przed dołączeniem jakichkolwiek nagłówków.
+ * Tutaj jest potrzebne głównie dla makra TEMP_FAILURE_RETRY oraz funkcji nanostleep.
+ */
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
@@ -17,30 +23,43 @@
 #define DEFAULT_N_THREADS 3
 #define ALPHABET_SIZE 128
 
+/* Makro do obsługi błędów krytycznych: wypisuje błąd, zabija proces grupą sygnałów i wychodzi. */
 #define ERR(source)                                                            \
   (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__),             \
    kill(0, SIGKILL), exit(EXIT_FAILURE))
+   
+/* Makro do generowania losowej liczby double w zakresie [0, 1] w sposób bezpieczny wątkowo. */
 #define NEXT_DOUBLE(seedptr) ((double)rand_r(seedptr) / (double)RAND_MAX)
 
+/* Struktura bufora cyklicznego przechowującego ścieżki do plików */
 typedef struct circular_buffer {
-  char *buf[CIRC_BUF_SIZE];
-  int head;
-  int tail;
-  int len;
-  pthread_mutex_t mx;
+  char *buf[CIRC_BUF_SIZE]; // Tablica wskaźników na napisy (ścieżki)
+  int head;                 // Indeks zapisu (gdzie wstawić nowy element)
+  int tail;                 // Indeks odczytu (skąd pobrać element)
+  int len;                  // Aktualna liczba elementów w buforze
+  pthread_mutex_t mx;       // Mutex do synchronizacji dostępu do bufora
 } circ_buf;
 
+/* Struktura argumentów przekazywanych do wątków */
 typedef struct thread_args {
-  pthread_t tid;
-  unsigned int seed;
-  circ_buf *cb;
-  int *freq;
-  pthread_mutex_t *mx_freq;
-  sigset_t *mask;
-  int *quit;
-  pthread_mutex_t *mx_quit;
+  pthread_t tid;            // ID wątku
+  unsigned int seed;        // Ziarno dla generatora liczb losowych (unikalne dla wątku)
+  circ_buf *cb;             // Wskaźnik na wspólny bufor cykliczny
+  int *freq;                // Tablica częstości znaków (wspólna)
+  pthread_mutex_t *mx_freq; // Mutex chroniący tablicę częstości
+  sigset_t *mask;           // Maska sygnałów (które sygnały ignorować/blokować)
+  int *quit;                // Flaga nakazująca zakończenie pracy
+  pthread_mutex_t *mx_quit; // Mutex chroniący flagę quit
 } thread_args_t;
 
+/**
+ * Funkcja msleep:
+ * Co robi: Usypia wątek na zadaną liczbę milisekund.
+ * W jaki sposób:
+ * 1. Przelicza milisekundy na sekundy i nanosekundy (format wymagany przez nanosleep).
+ * 2. Wywołuje nanosleep w pętli makra TEMP_FAILURE_RETRY, aby wznowić czekanie,
+ * jeśli funkcja zostanie przerwana przez sygnał.
+ */
 void msleep(unsigned msec) {
   time_t sec = (int)(msec / 1000);
   msec = msec - (sec * 1000);
@@ -51,6 +70,16 @@ void msleep(unsigned msec) {
     ERR("nanosleep");
 }
 
+/**
+ * Funkcja circ_buf_create:
+ * Co robi: Tworzy i inicjalizuje strukturę bufora cyklicznego.
+ * W jaki sposób:
+ * 1. Alokuje pamięć na strukturę `circ_buf`.
+ * 2. Inicjalizuje wskaźniki w tablicy `buf` na NULL.
+ * 3. Ustawia liczniki (head, tail, len) na 0.
+ * 4. Inicjalizuje mutex chroniący bufor.
+ * Zwraca wskaźnik na utworzony bufor.
+ */
 circ_buf *circ_buf_create() {
   circ_buf *cb = malloc(sizeof(circ_buf));
   if (cb == NULL)
@@ -69,6 +98,14 @@ circ_buf *circ_buf_create() {
   return cb;
 }
 
+/**
+ * Funkcja circ_buf_destroy:
+ * Co robi: Usuwa bufor cykliczny i zwalnia całą powiązaną pamięć.
+ * W jaki sposób:
+ * 1. Niszczy mutex.
+ * 2. Przechodzi przez tablicę i zwalnia każdy zaalokowany string (ścieżkę), który mógł zostać w buforze.
+ * 3. Zwalnia pamięć samej struktury bufora.
+ */
 void circ_buf_destroy(circ_buf *cb) {
   if (cb == NULL)
     return;
@@ -79,6 +116,18 @@ void circ_buf_destroy(circ_buf *cb) {
   free(cb);
 }
 
+/**
+ * Funkcja circ_buf_push:
+ * Co robi: Dodaje nową ścieżkę do bufora (producent).
+ * W jaki sposób:
+ * 1. Sprawdza, czy bufor jest pełny (len == CIRC_BUF_SIZE). Jeśli tak, czeka aktywnie (sleep),
+ * aż zwolni się miejsce.
+ * 2. Alokuje pamięć na kopię łańcucha `path` (strdup ręcznie).
+ * 3. Blokuje mutex bufora.
+ * 4. Zwalnia stary element pod indeksem `head` (dla bezpieczeństwa) i wpisuje nowy.
+ * 5. Inkrementuje `head` (modulo rozmiar bufora) i `len`.
+ * 6. Odblokowuje mutex.
+ */
 void circ_buf_push(circ_buf *cb, char *path) {
   if (cb == NULL)
     return;
@@ -99,6 +148,17 @@ void circ_buf_push(circ_buf *cb, char *path) {
   pthread_mutex_unlock(&cb->mx);
 }
 
+/**
+ * Funkcja circ_buf_pop:
+ * Co robi: Pobiera ścieżkę z bufora (konsument).
+ * W jaki sposób:
+ * 1. Wchodzi w nieskończoną pętlę sprawdzającą dostępność danych.
+ * 2. Blokuje mutex i sprawdza `len > 0`.
+ * 3. Jeśli są dane: pobiera wskaźnik spod indeksu `tail`, aktualizuje `tail` i `len`,
+ * odblokowuje mutex i zwraca wskaźnik.
+ * 4. Jeśli brak danych: odblokowuje mutex i usypia wątek na 5ms (aktywne oczekiwanie/polling),
+ * po czym ponawia próbę.
+ */
 char *circ_buf_pop(circ_buf *cb) {
   if (cb == NULL)
     ERR("circ_buf is NULL");
@@ -118,6 +178,14 @@ char *circ_buf_pop(circ_buf *cb) {
   }
 }
 
+/**
+ * Funkcja read_args:
+ * Co robi: Parsuje argumenty wiersza poleceń.
+ * W jaki sposób:
+ * 1. Ustawia domyślną liczbę wątków.
+ * 2. Jeśli podano argument (argc >= 2), konwertuje go na int (atoi).
+ * 3. Waliduje, czy liczba wątków jest dodatnia; jeśli nie, kończy program.
+ */
 void read_args(int argc, char *argv[], int *n_threads) {
   *n_threads = DEFAULT_N_THREADS;
   if (argc >= 2) {
@@ -129,11 +197,31 @@ void read_args(int argc, char *argv[], int *n_threads) {
   }
 }
 
+/**
+ * Funkcja has_ext:
+ * Co robi: Sprawdza, czy plik ma określone rozszerzenie.
+ * W jaki sposób:
+ * 1. Znajduje ostatnie wystąpienie kropki w ścieżce (`strrchr`).
+ * 2. Porównuje tekst po kropce z oczekiwanym rozszerzeniem (`strcmp`).
+ * Zwraca 1 (prawda) lub 0 (fałsz).
+ */
 int has_ext(char *path, char *ext) {
   char *ext_pos = strrchr(path, '.');
   return ext_pos && strcmp(ext_pos, ext) == 0;
 }
 
+/**
+ * Funkcja walk_dir:
+ * Co robi: Rekurencyjnie przeszukuje katalog i dodaje pliki .txt do bufora.
+ * W jaki sposób:
+ * 1. Otwiera katalog (`opendir`).
+ * 2. Iteruje po zawartości (`readdir`). Pomija "." i "..".
+ * 3. Tworzy pełną ścieżkę do pliku (dokleja nazwę do bieżącej ścieżki).
+ * 4. Pobiera metadane pliku (`stat`).
+ * 5. Jeśli to katalog: wywołuje samą siebie rekurencyjnie (`walk_dir`).
+ * 6. Jeśli to plik regularny (`S_ISREG`) i ma rozszerzenie .txt: wrzuca ścieżkę do bufora (`circ_buf_push`).
+ * 7. Zamyka katalog.
+ */
 void walk_dir(char *path, circ_buf *cb) {
   DIR *dir = opendir(path);
   if (dir == NULL)
@@ -167,6 +255,14 @@ void walk_dir(char *path, circ_buf *cb) {
     ERR("closedir");
 }
 
+/**
+ * Funkcja bulk_read:
+ * Co robi: Czyta z deskryptora pliku zadaną liczbę bajtów, odporna na przerwania.
+ * W jaki sposób:
+ * 1. Wywołuje `read` w pętli.
+ * 2. Używa `TEMP_FAILURE_RETRY` by obsłużyć przerwanie sygnałem (EINTR).
+ * 3. Sumuje odczytane bajty i przesuwa wskaźnik bufora, aż przeczyta `count` bajtów lub napotka EOF (0).
+ */
 ssize_t bulk_read(int fd, char *buf, size_t count) {
   ssize_t c;
   ssize_t len = 0;
@@ -183,6 +279,19 @@ ssize_t bulk_read(int fd, char *buf, size_t count) {
   return len;
 }
 
+/**
+ * Funkcja thread_work:
+ * Co robi: Główna funkcja wykonywana przez wątki robocze (konsumentów).
+ * W jaki sposób:
+ * 1. Blokuje sygnały (maska przekazana w args), aby nie przerywały pracy.
+ * 2. W pętli pobiera ścieżki z bufora (`circ_buf_pop`).
+ * 3. Otwiera plik i czyta go znak po znaku (`bulk_read` po 1 bajcie).
+ * 4. W pętli czytania:
+ * - Sprawdza flagę `quit` (chronioną mutexem). Jeśli ustawiona, zwalnia zasoby i kończy.
+ * - Zlicza wystąpienie znaku, aktualizując globalną tablicę `freq` (chronioną mutexem).
+ * - Dodaje sztuczne opóźnienie (`msleep(2)`), aby symulować długą pracę.
+ * 5. Zamyka plik po przeczytaniu.
+ */
 void *thread_work(void *_args) {
   thread_args_t *args = _args;
   sigset_t *mask = args->mask;
@@ -230,6 +339,15 @@ void *thread_work(void *_args) {
   return NULL;
 }
 
+/**
+ * Funkcja signal_handling:
+ * Co robi: Dedykowany wątek do obsługi sygnałów.
+ * W jaki sposób:
+ * 1. Czeka na sygnały z maski (`sigwait`), które są zablokowane w innych wątkach.
+ * 2. SIGUSR1: Wypisuje aktualne statystyki (tablicę `freq`), blokując mutex na czas odczytu.
+ * 3. SIGINT (Ctrl+C): Ustawia flagę `quit` na 1 (chronioną mutexem) i kończy swoje działanie,
+ * co spowoduje zakończenie pętli w wątkach roboczych.
+ */
 void *signal_handling(void *_args) {
   thread_args_t *args = _args;
   int *freq = args->freq;
@@ -262,6 +380,18 @@ void *signal_handling(void *_args) {
   return NULL;
 }
 
+/**
+ * Funkcja main:
+ * Co robi: Główny punkt wejścia, inicjalizacja i koordynacja.
+ * W jaki sposób:
+ * 1. Inicjalizuje struktury (argumenty wątków, bufor, mutexy).
+ * 2. Wypełnia bufor plikami (`walk_dir`) - uwaga: tutaj dzieje się to przed startem wątków.
+ * 3. Blokuje sygnały SIGUSR1 i SIGINT w wątku głównym (dziedziczone przez potomne).
+ * 4. Uruchamia wątek obsługi sygnałów oraz wątki robocze.
+ * 5. Wchodzi w pętlę, w której co 100ms wysyła do procesu sygnał SIGUSR1 (by wypisać statystyki)
+ * i sprawdza flagę `quit`.
+ * 6. Po wyjściu z pętli (gdy quit=1), czeka na zakończenie wątków (`pthread_join`) i zwalnia zasoby.
+ */
 int main(int argc, char *argv[]) {
   int n_threads;
   read_args(argc, argv, &n_threads);

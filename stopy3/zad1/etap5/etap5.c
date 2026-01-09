@@ -24,10 +24,16 @@ typedef struct t{
     int* L;
     int* licznik;
     pthread_mutex_t *mxlicznik;
-    sigset_t *pMask;
     bool *pQuitFlag;
     pthread_mutex_t *pmxQuitFlag;
 } t_t;
+
+typedef struct signal_handler_args{
+    pthread_t tid;
+    bool *pQuitFlag;
+    sigset_t *pMask;
+    pthread_mutex_t *pmxQuitFlag;
+} signal_handler_args_t;
 void* thread_counter();
 void msleep(UINT milisec);
 
@@ -37,11 +43,11 @@ void *signal_handling(void *voidArgs);
 int main(int argc, char **argv){
     int threadCount;
     int L = 1;
-    bool quitFlag = 0;
+    bool quitFlag = false;
     int licznik = 0;
     ReadArguments(argc, argv, &threadCount);
     pthread_mutex_t pmxlicznik = PTHREAD_MUTEX_INITIALIZER;
-    pthread_mutex_t mxQuitFlag = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_t pmxQuitFlag = PTHREAD_MUTEX_INITIALIZER;
     t_t *watki = (t_t*)malloc(sizeof(t_t) * threadCount);
     if(watki == NULL){
         ERR("malloc");
@@ -52,8 +58,11 @@ int main(int argc, char **argv){
     if(pthread_sigmask(SIG_BLOCK, &newMask, &oldMask)){
         ERR("pthread_sigmask");
     }
-    pthread_t signal_tid;
-    if(pthread_create(&signal_tid, NULL, signal_handling, &watki[0])){
+    signal_handler_args_t sigArgs;
+    sigArgs.pQuitFlag = &quitFlag;
+    sigArgs.pMask = &newMask;
+    sigArgs.pmxQuitFlag = &pmxQuitFlag;
+    if(pthread_create(&sigArgs.tid, NULL, signal_handling, &sigArgs)){
         ERR("pthread_create_signal");
     }
     srand(time(NULL));
@@ -63,9 +72,8 @@ int main(int argc, char **argv){
         watki[i].M = rand_r(&watki[i].seed) % 99 + 2;
         watki[i].licznik = &licznik;
         watki[i].mxlicznik = &pmxlicznik;
-        watki[i].pMask = &newMask;
         watki[i].pQuitFlag = &quitFlag;
-        watki[i].pmxQuitFlag = &mxQuitFlag;
+        watki[i].pmxQuitFlag = &pmxQuitFlag;
     }
     for(int i =0;i<threadCount;i++){
         if(pthread_create(&(watki[i].tid), NULL, thread_counter, &watki[i])){
@@ -73,13 +81,14 @@ int main(int argc, char **argv){
         }
     }
     while(1){
-        pthread_mutex_lock(&mxQuitFlag);
+        pthread_mutex_lock(&pmxQuitFlag);
         if(quitFlag == true){
-            pthread_mutex_unlock(&mxQuitFlag);
+            pthread_mutex_unlock(&pmxQuitFlag);
+            printf("zadzialalo\n");
             break;
         }
         else{
-            pthread_mutex_unlock(&mxQuitFlag);
+            pthread_mutex_unlock(&pmxQuitFlag);
             pthread_mutex_lock(&pmxlicznik);
             if(licznik >= threadCount){
                 licznik = 0;
@@ -116,7 +125,7 @@ void ReadArguments(int argc, char **argv, int *threadCount){
 void* thread_counter(void* VoidPtr){
     t_t *args = VoidPtr;
     int last_L = 0;
-    while((*args->pQuitFlag) == 0){
+    while((*args->pQuitFlag) == false){
         int current_L = *args->L;
         if(current_L > last_L){
             if((*args->L % args->M) == 0){
@@ -145,7 +154,7 @@ void msleep(UINT milisec)
 
 void *signal_handling(void *voidArgs)
 {
-    t_t *args = voidArgs;
+    signal_handler_args_t *args = voidArgs;
     int signo;
     srand(time(NULL));
     for(;;){

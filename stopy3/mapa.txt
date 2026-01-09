@@ -1,0 +1,53 @@
+zad1 
+    Tworzenie n wątków, każdy wątek wypisuje „*” dla pokazania, że działa, wątek główny czeka na zakończenie wszystkich wątków
+    Wątki poboczne losują swoje mnożniki i wypisują je na ekran
+    Wątek główny wykonuje odliczanie, poboczne sprawdzają podzielność, całość bez synchronizacji/ochrony dostępu do licznika L, C-c kończy bez specjalnej obsługi
+    Dodajemy ochronę L przed zmianą zanim wszystkie wątki poboczne nie sprawdzą podzielności. Sugestia: może się przydać licznik wątków, które już sprawdziły. Pokazujemy kod ochrony dostępu
+    Dodajemy pełną obsługę C-c. Pokazujemy kod zamykania programu
+
+zad2. 
+    Program powinien składać się z czterech wątków:
+
+    Wątek główny - tworzy pozostałe wątki i jest odpowiedzialny za obsługę sygnałów.
+    Wątek dekodujący - zajmuje się dekodowaniem klatek filmu (decode_frame()) i przesyłaniem ich dalej.
+    Wątek transformujący - odbiera klatki od wątku dekodującego, transformuje je (transform_frame()) i przesyła dalej.
+    Wątek wyświetlający - odbiera klatki od wątku transformującego i wysyła je na ekran (display_frame()) pilnując stałego klatkażu 30 FPS (30 klatek na sekundę).
+    W tym zadaniu zaimplementuj bufor cykliczny w następujący sposób:
+
+    Podczas tworzenia struktury ustaw head oraz tail na zero. Head oznacza miejsce, na które wstawimy następny element, natomiast tail - miejsce na którym znajduje się ostatni element.
+
+    Do synchronizacji użyjemy tylko jednego mutexu - dla bufora (tablicy) oraz, na drodze wyjątku, techniki ,,busy waiting”. Nie jest to optymalny sposób na implementację tej struktury danych, jako ćwiczenie przed następnym laboratorium, możesz spróbować poprawić ten program przy wykorzystaniu innych technik synchronizacji.
+
+    Aby dodać nowy element (push) do bufora, poczekaj aż nie będzie pełny (busy waiting z 5ms usypianiem wątku). Dodaj nowy element na miejsce wskazywane przez head, przesuń head na nową pozycję i zwiększ licznik elementów.
+
+    Podobnie, aby pobrać element (pop) z bufora, poczekaj aż nie będzie pusty (busy waiting z 5ms usypianiem wątku). Pobierz element wskazywany przez tail, przesuń tail na następną pozycję i zmniejsz licznik elementów.
+
+    Przemyśl, jak powyższe funkcje powinny być synchronizowane, aby zapewnić bezpieczeństwo i uniknąć deadlocka, przy jednocześnie możliwie krótkiej sekcji krytycznej. Możesz założyć, że bufor jest używany jedynie przez jeden wątek producenta (wywołujący push) oraz jeden konsumenta (wywołujacy pop) na raz.
+        Stwórz 3 wątki jak w opisie zadania. Na tym etapie dane mogą być przesyłane między wątkami przez współdzieloną zmienną chronioną mutexem. W przypadku braku dostępnych danych wątek czeka 5ms i próbuje ponownie. Mutexy nie powinny być zablokowane dłużej, niż to konieczne.
+
+    Dodaj synchronizację wyświetlania w wątku wyświetlającym (podpowiedź: clock_gettime).
+
+    Zaimplementuj bufor cykliczny tak, jak to opisano w treści zadania.
+
+    Główny wątek obsługuje sygnały - po otrzymaniu SIGINT (ctrl+c) główny wątek sygnalizuje pozostałym wątkom koniec pracy, czeka na ich zakończenie, zwalnia wszystkie zasoby i się kończy.
+zad3.
+        Odczytać argumenty, zainicjować tablicę. Utworzyć wątki psów. Każdy wątek zwiększa o 1 losową komórkę tablicy, wypisuje jej numer i się kończy. Po zakończeniu wszystkich wątków psów wątek główny wypisuje końcowy stan toru.
+    Działa logika wątku psa, na razie bez blokowania.
+    Działa blokowanie z użyciem mutexów.
+    Działa kończenie programu z użyciem SIGINT.
+
+prog17
+po prostu watki
+
+prog18
+watki + mutex + detached + atttr
+prog19 + signal
+
+prog20
+gettime + cleanup push, pop + cancel.
+
+eng
+queue, diry i wszystko inne
+
+antoni
+circular buffer
