@@ -32,10 +32,10 @@ void sethandler(void (*f)(int), int sigNo){
     }
 }
 
-void sig_handler(int sig){
+void sig_handler(int sig){ //handler na sygnal. zapisuje last signal
     printf("[%d] received signal %d\n", getpid(), sig);
     last_signal = sig;
-}
+} 
 
 void sigchld_handler(int sig){
     pid_t pid;
@@ -78,10 +78,10 @@ void parent_work(int k, int p, int r){
     struct timespec tk = {k, 0};
     struct timespec tp = {p, 0};
 
-    sethandler(sig_handler, SIGALRM);
-    alarm(r * 10);
+    sethandler(sig_handler, SIGALRM); //handler alarmu
+    alarm(r * 10); //ustawia alarm
 
-    while(last_signal != SIGALRM){
+    while(last_signal != SIGALRM){ //wysyla naprzemiennie usr1 usr2
         nanosleep(&tk, NULL);
         if(kill(0, SIGUSR1) < 0){
             ERR("kill");
